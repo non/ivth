@@ -1,8 +1,8 @@
 ## Ivth
 
-"Insignificance is our existence / Hear the litany of life's persistance."
-
--- Bolt Thrower, "The IVth Crusade"
+> Insignificance is our existence / Hear the litany of life's persistance.
+> 
+> -- Bolt Thrower, "The IVth Crusade"
 
 ### Overview
 
@@ -36,12 +36,12 @@ soon as it is seen. In compiling mode (used to define new words) only
 
 Currently only `:` and `;` are fast. Until some of the problems with
 the interpretation model are overcome it's not clear that writing
-other fast words is very useful--if notx, we can remove the distinction
+other fast words is very useful--if not, we can remove the distinction
 of these two modes and possible get ride of the `;` word as well.
 
 ### Built-in Words
 
-There are currently 11 built-in words, although once Ivth is finished
+There are currently 9 built-in words, although once Ivth is finished
 this number should be much smaller. They are currently:
 
   * `(*` Used to start a comment (can be removed).
@@ -51,12 +51,10 @@ this number should be much smaller. They are currently:
   * `nor` Return bitwise-nor of `s1` and `s2`
   * `+` Return the sum of `s1` and `s2`
   * `.c` Print the character value of `s1`
-  * `.n` Print the decimal value of `s1` (can be bootstrapped/removed).
-  * `.s` Print a representation of the stack (can be removed).
   * `:` Start defining a new word.
   : `;` End the definition of a new word.
 
-Since 3 of the 11 can already be removed, the goal will be to reduce
+Since 1 of the 9 can already be removed, the goal will be to reduce
 the remaining 8. It would be nice to define more primitive parsing
 manipulation words to bootstrap `(*`, `:`, and `;` but that might
 require too much machinery in the interpreter.
@@ -80,3 +78,13 @@ that word's stack frame).
 These problems are definitely solvable, and they don't impact Turing
 completeness. They just prevent bootstrapping a reasonable control
 flow.
+
+### Future
+
+It might be nice to move to numeric addressing, to support more
+control flow. We'd need to introduce something like FORTH's return
+stack but we'd be able to simplify some other things.
+
+It would be nice for the interpreter loop itself to be written in
+IVTH. Again, if we moved more of the interpreter state into addressed
+variables we could access interpreter state directly in Ivth.

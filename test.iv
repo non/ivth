@@ -1,0 +1,134 @@
+(*
+72 .c 69 .c 76 .c 76 .c 79 .c 32 .c 87 .c 79 .c 82 .c 76 .c 68 .c 10 .c
+0 10 68 76 82 79 87 32 79 76 76 69 72 2 copy 0br 4 .c 0 0br -8 0 copy
+*)
+
+(* convenient printing stuff *)
+: nl 10 .c ;
+: sp 32 .c ;
+
+(* some stack manipulation *)
+: drop 0 copy ;
+: dup 2 copy ;
+: swap 2 alt ;
+: rot 3 alt ;
+: -rot rot rot ;
+: 2drop drop drop ;
+: 2dup swap dup rot dup -rot ;
+
+(*
+0 1 2 .s swap .s nl drop drop drop
+
+0 1 2 3 .s rot .s nl drop drop drop drop
+0 1 2 3 .s -rot .s nl drop drop drop drop
+*)
+
+(* bitwise ops *)
+: ~ dup nor ;
+: | nor ~ ;
+: & ~ swap ~ nor ;
+: nand & ~ ;
+: ^ dup rot dup -rot & -rot nor nor ;
+
+(* logical ops *)
+: != ^ 0br 4 1 0 0br 1 0 ;
+: == != 0br 4 0 0 0br 1 1 ;
+: bool 0 != ;
+: ! 0 == ;
+: ==0 0 == ;
+: !=0 0 != ;
+
+(* sign checks *)
+: 0< -2147483648 & 0 != ;
+: 0>= -2147483648 & 0 == ;
+: 0> 2147483647 & 0 != ;
+: 0<= 2147483647 & 0 == ;
+: cmp0 dup 0>= 0br 11
+  0> 0br 4
+  1 0 0br 6
+  0 0 0br 2
+drop -1 ;
+
+(* addition/subtraction *)
+: negate ~ 1 + ;
+: - negate + ;
+: -- 1 - ;
+: ++ 1 + ;
+
+(* comparisons *)
+: cmp swap - cmp0 ;
+: < cmp -1 == ;
+: <= cmp 1 != ;
+: > cmp 1 == ;
+: >= cmp 1 != ;
+
+(* testing compare *)
+(*
+: cmptest 90 .c .s sp 2dup .n sp .n sp cmp .n nl ;
+
+1 0 cmptest
+0 1 cmptest
+1 1 cmptest
+-1 -1 cmptest
+9 10 cmptest
+9 -10 cmptest
+29921 2444 cmptest
+24 9929 cmptest
+93292 0 cmptest
+0 0 cmptest
+0 124828 cmptest
+-1191 0 cmptest
+-1 -1 cmptest
+*)
+
+(* multiplication/division *)
+: *helper -rot -- -rot dup -rot + -rot swap rot ;
+: * 0 -rot dup 0br 5 rot *helper 0 0br -9 drop drop ;
+: % 2dup >= 0br 7 dup -rot - swap 0 0br -11 drop ;
+: /helper rot ++ -rot dup -rot - swap ;
+: / 0 -rot 2dup >= 0br 4 /helper 0 0br -8 2drop ;
+
+(*
+10 10 cmp 0<= .n nl
+11 10 cmp 0<= .n nl
+100 10 cmp 0<= .n nl
+*)
+
+(*
+100 .n sp 100 10 % .n sp 100 10 / .n nl
+11 .n sp 11 10 % .n sp 11 10 / .n nl
+10 .n sp 10 10 % .n sp 10 10 / .n nl
+*)
+
+(* number printing *)
+: . dup 0< 0br 3 45 .c negate
+-1 swap
+  dup 10 % swap 10 / dup 0br 3 0 0br -12
+drop dup 0>= 0br 6
+  48 + .c 0 0br -10
+drop ;
+
+(* testing number printing *)
+(*
+: .test dup .n sp . nl ;
+
+-999 .test
+-10 .test
+0 .test
+1 .test
+9 .test
+10 .test
+11 .test
+100 .test
+101 .test
+999 .test
+*)
+
+: cats dup . sp 67 .c 65 .c 84 .c 83 .c nl -- dup 0<= 0br -17 drop ;
+
+(* .s nl *)
+
+5 cats
+11 cats
+
+(* .s nl *)
