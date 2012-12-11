@@ -5,70 +5,91 @@ import spire.syntax._
 
 import scala.collection.mutable
 
-sealed trait Symbol { def fast: Boolean }
-case class Literal(n: Int) extends Symbol { def fast = false }
-case class Builtin(name: String, fast: Boolean, f: Runtime => Unit) extends Symbol
-case class Compiled(name: String, fast: Boolean, symbols: Array[String]) extends Symbol {
-  override def toString: String =
-    "Compiled(%s, %s, Array(%s))" format (name, fast, symbols.mkString(", "))
-}
+class DataUnderflowError extends Exception
+class ReturnUnderflowError extends Exception
 
-case class Frame(var w: Int, words: Array[String]) {
-  def next(): Unit = w += 1
-  def done(): Boolean = w >= words.length
-  def apply(): String = words(w)
-  def apply(n: Int): String = words(n)
-  val saved = mutable.ArrayBuffer.empty[String]
-  def storeWord(word: String): Unit = saved.append(word)
-  def loadWords(): Array[String] = {
-    val words = saved.toArray
-    saved.clear()
-    words
-  }
-}
-
-case class Runtime(words: Array[String]) {
-  var wstack = mutable.ArrayBuffer(Frame(0, words))
-  var nstack = mutable.ArrayBuffer.empty[Int]
-  var symbols = mutable.Map.empty[String, Symbol]
-  var compiling: Boolean = false
-
-  initBuiltins()
-
-  def push(n: Int): Unit = nstack.append(n)
-
+final class Stack {
+  private val buf = mutable.ArrayBuffer.empty[Int]
+  def isEmpty: Boolean = buf.isEmpty
+  def length: Int = buf.length
+  def push(n: Int): Unit = buf.append(n)
+  def get(i: Int): Int =
+    if (i < buf.length) buf(i) else throw new DataUnderflowError()
   def pop(): Int = {
-    val i = nstack.length - 1
-    val n = nstack(i)
-    nstack.remove(i)
+    if (buf.isEmpty) throw new DataUnderflowError()
+    val i = buf.length - 1
+    val n = buf(i)
+    buf.remove(i)
     n
   }
+  override def toString() = buf.mkString("Stack(", ", ", ")")
+}
 
-  def pushFrame(frame: Frame): Unit = wstack.append(frame)
-  def popFrame(): Unit = wstack.remove(wstack.length - 1)
+sealed trait Lookup
+case class Literal(n: Int) extends Lookup
+case class Word(addr: Int) extends Lookup
+case object NotFound extends Lookup
 
-  def stackLength(): Int = nstack.length
+final case class Runtime(memlen: Int, words: Array[String]) {
 
-  def getNumWords(): Int = wstack.last.words.length
-  def getWord(n: Int) = wstack.last.apply(n)
-  def getWordPtr(): Int = wstack.last.w
-  def setWordPtr(n: Int) = wstack.last.w = n
+  // program count
+  //
+  // if rstack is empty, refers to a word index.
+  // otherwise refers to a memory index.
+  var pc: Int = 0
 
-  def setInterpreting(): Unit = compiling = false
-  def setCompiling(): Unit = compiling = true
+  // memory
+  //
+  // used to read and write data. eventually, pc may be moved into memory.
+  // for now this mostly stores built-in and compiled words
+  val memory: Array[Int] = new Array[Int](memlen)
 
-  def addSymbol(s: String, sym: Symbol): Unit =
-    symbols(s) = sym
+  // mfree
+  //
+  // pointer the next free integer of memory. once allocated memory will never
+  // be freed so this counter just goes up and up (maybe exploding eventually).
+  var mfree: Int = 1
 
-  def addBuiltin(s: String, fast: Boolean, f: Runtime => Unit): Unit =
-    symbols(s) = Builtin(s, fast, f)
+  // rstack
+  //
+  // stack of memory address to return to after function calls
+  var rstack = new Stack
+
+  // dstack
+  //
+  // stack of integer values, the main way to manipulate data
+  var dstack = new Stack
+
+  // compiling
+  //
+  // whether the interpreter is currently compiling a word or not. changes the
+  // semantics of non-fast words and literals.
+  var compiling: Boolean = false
+
+  // read and write locations in 'memory'
+  def write(n: Int): Unit = { memory(mfree) = n; mfree += 1 }
+  def read(i: Int): Int = memory(i)
+
+  // push and pop values to/from 'dstack'
+  def push(n: Int) = dstack.push(n)
+  def pop(): Int = dstack.pop()
+
+  // dictionary used to map words to memory addresses
+  val dict = mutable.Map.empty[String, (Boolean, Int)]
+
+  // array of builtin words, and variable to track next free slot
+  val builtins = new Array[Function1[Runtime, Unit]](16)
+  var bfree: Int = 1
+
+  def addBuiltin(name: String, fast: Boolean, f: Function1[Runtime, Unit]) {
+    dict(name) = (fast, -bfree)
+    builtins(bfree) = f
+    bfree += 1
+  }
 
   def initBuiltins() {
     addBuiltin("(*", true, { r =>
-      var w = r.getWordPtr()
-      val n = r.getNumWords()
-      while (w < n && r.getWord(w) != "*)") w += 1
-      setWordPtr(w + 1)
+      while (r.words(r.pc) != "*)") r.pc += 1
     })
 
     addBuiltin("copy", false, { r =>
@@ -87,83 +108,100 @@ case class Runtime(words: Array[String]) {
 
     addBuiltin("0br", false, { r =>
       val t = r.pop()
-      val n = getWordPtr()
-      val offset = if (t == 0) getWord(n).toInt else 0
-      setWordPtr(n + 1 + offset)
+      val offset = if (t == 0) r.words(r.pc).toInt else 0
+      r.pc += 1 + offset
     })
 
-    // addBuiltin("w>", false, r => r.push(r.getWordPtr()))
-    // addBuiltin(">w", false, r => r.setWordPtr(r.pop()))
     addBuiltin("nor", false, r => r.push(~(r.pop() | r.pop())))
-    addBuiltin("+", false, r => r.push(r.pop() + r.pop()))
+
+    addBuiltin("+", false, { r =>
+      //println("plus: %s %s" format (r.dstack, r.rstack))
+      val x = r.pop()
+      val y = r.pop()
+      r.push(x + y)
+    })
 
     addBuiltin(".c", false, r => System.out.print(r.pop().toChar))
-    //addBuiltin(".n", false, r => System.out.print(r.pop().toString))
-    //addBuiltin(".s", false, r => System.out.print(nstack.mkString("stack<", " ", ">")))
-
-    // addBuiltin("_", true, { r =>
-    //   val n = r.getWordPtr()
-    //   val word = r.getWord(n)
-    //   r.setWordPtr(n + 1)
-    //   r.lookup(word) match {
-    //     case Some(sym) => r.start(sym)
-    //     case None => r.die("no symbol found for %s" format word)
-    //   }
-    // })
 
     addBuiltin(":", false, { r =>
-      setCompiling()
-      push(getWordPtr())
-      setWordPtr(getWordPtr() + 1)
+      r.compiling = true
+      val name = r.words(r.pc)
+      dict(name) = (false, r.mfree)
+      r.pc += 1
     })
 
     addBuiltin(";", true, { r =>
-      val name = getWord(pop())
-      addSymbol(name, Compiled(name, false, frame.loadWords()))
-      setInterpreting()
+      r.compiling = false
     })
   }
 
-  def lookup(s: String): Option[Symbol] = symbols.get(s).orElse {
-    if (s.matches("-?[1-9][0-9]*|0"))
-      Some(Literal(s.toInt))
+  initBuiltins()
+
+  def lookup(s: String): Lookup = dict.get(s) match {
+    case Some((immed, addr)) => Word(addr)
+    case None => if (s.matches("-?[1-9][0-9]*|0"))
+      Literal(s.toInt)
     else if (s.matches("0x[0-9A-Fa-f]+"))
-      Some(Literal(java.lang.Integer.parseInt(s.substring(2), 16)))
+      Literal(java.lang.Integer.parseInt(s.substring(2), 16))
     else
-      None
+      NotFound
   }
 
-  def frame: Frame = wstack.last
+  def run(): Unit = {
+    var done = false
+    while (!done) {
+      if (rstack.isEmpty) {
+        if (pc >= words.length) return ()
 
-  def start(sym: Symbol) = sym match {
-    case Builtin(_, _, f) => f(this)
-    case Compiled(_, _, words) => pushFrame(Frame(0, words))
-    case Literal(n) => push(n)
-  }
-
-  def die(msg: String) {
-    symbols.foreach {
-      case (k, v) => println("symbol %s -> %s" format (k, v))
-    }
-    println(nstack)
-    sys.error(msg)
-  }
-
-  def prestart(word: String) = lookup(word) match {
-    case Some(sym) => if (!compiling || sym.fast) start(sym) else frame.storeWord(word)
-    case None => die("no symbol found for %s" format word)
-  }
-
-  def run() {
-    while (!wstack.isEmpty) {
-      while (!frame.done) {
-        val word = frame()
-        frame.next()
-        prestart(word)
+        val s = words(pc)
+        if (compiling) {
+          lookup(s) match {
+            case Word(addr) =>
+              if (false /* word is fast */) {
+              } else {
+                memory(mfree) = addr
+                mfree += 1
+              }
+            case Literal(n) =>
+              memory(mfree) = -1
+              memory(mfree + 1) = n
+              mfree += 2
+            case NotFound =>
+              die("could not compile %s" format s)
+          }
+          pc += 1
+        } else {
+          lookup(s) match {
+            case Word(addr) =>
+              rstack.push(pc + 1)
+              pc = addr
+            case Literal(n) =>
+              push(n)
+              pc += 1
+            case NotFound =>
+              die("could not interpret %s" format s)
+          }
+        }
+      } else if (pc < 0) {
+        //println("starting builtin pc=%s rstack=%s" format (pc, rstack))
+        builtins(-pc)(this)
+        pc = rstack.pop()
+        //println("after builtin pc=%s rstack=%s" format (pc, rstack))
+      } else {
+        rstack.push(pc)
+        val addr = memory(pc)
+        if (addr == -1) {
+          val n = memory(pc + 1)
+          push(n)
+          pc += 2
+        } else {
+          pc = addr
+        }
       }
-      wstack.remove(wstack.length - 1)
     }
   }
+
+  def die(msg: String): Unit = sys.error(msg)
 }
 
 import scala.io.Source
@@ -174,6 +212,14 @@ object Runtime {
   def runfile(path: String): Unit =
     Runtime(parse(path)).run()
 
-  def main(args: Array[String]): Unit =
-    args.foreach(runfile)
+  def main(args: Array[String]): Unit = {
+    val r = Runtime(512 * 1024, Array("48", "9", "+", ".c", "10", ".c"))
+    try {
+      r.run()
+    } catch {
+      case e: Exception =>
+        println(e)
+        println("pc=%s d=%s r=%s" format (r.pc, r.dstack, r.rstack))
+    }
+  }
 }
