@@ -104,7 +104,7 @@ final case class Runtime(memlen: Int, words: Array[String]) {
     jump(11)
     while (pc != 0) {
       i += 1
-      //if (i >= 200) sys.error("exhausted")
+      //if (i >= 8000) sys.error("exhausted")
 
       //println("pc=%s c=%s mfree=%s w=%s ds=%s rs=%s" format (pc, compiling, mfree, w, ds, rs))
       val addr = memory(pc)
@@ -216,8 +216,8 @@ final case class Runtime(memlen: Int, words: Array[String]) {
     })
 
     slow(12, ".c", r => System.out.print(r.ds.pop().toChar))
-    //slow(13, ".n", r => System.out.print(r.ds.pop()))
-    //slow(14, ".s", r => System.out.print(r.ds))
+    slow(13, ".n", r => System.out.print(r.ds.pop()))
+    slow(14, ".s", r => System.out.print(r.ds))
     // slow(15, ".r", r => System.out.print(r.rs))
 
     slow(16, ":", { r =>
@@ -348,6 +348,16 @@ drop -1 ;             ( NEG: return -1 )
 : <= cmp 1 != ;
 : > cmp 1 == ;
 : >= cmp 1 != ;
+
+: *helper -rot -- -rot dup -rot + -rot swap rot ;
+: * 0 -rot dup 6 0br rot *helper 0 -12 0br ;
+
+: % 2dup >= 9 0br dup -rot - swap 0 -14 0br drop ;
+
+: /helper rot ++ -rot dup -rot - swap ;
+: / 0 -rot 2dup >= 6 0br /helper 0 -11 0br 2drop ;
+
+: /test .s / .s nl drop ;
 
 : # .c ; 10 68 76 82 79 87 32 79 76 76 69 72 # # # # # # # # # # # #
 
