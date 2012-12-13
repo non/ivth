@@ -111,7 +111,12 @@ final case class Runtime(memlen: Int, words: Array[String]) {
       // println("-1 = %s" format memory(pc-1))
       // println("+0 = %s" format memory(pc))
       // println("+1 = %s" format memory(pc+1))
-      log("  jumping to %s" format addr)
+      val ow = dict.toList.filter(_._2 == (addr.abs - 1)).headOption
+      if (ow.isDefined) {
+        log("  jumping to %s (%s)" format (addr, ow.get._1))
+      } else {
+        log("  jumping to %s" format addr)
+      }
       pc += 1
       jump(addr)
       log("  pc=%s ds=%s rs=%s" format (pc, ds, rs))
@@ -150,14 +155,19 @@ final case class Runtime(memlen: Int, words: Array[String]) {
     builtins(3) = { r => r.pc = r.rs.pop() }
 
     slow(4, "!", { r =>
+      //println("   !in  %s %s" format (r.ds, r.rs))
       val addr = r.ds.pop()
       val n = r.ds.pop()
+      //println("   !memory(%s) = %s" format (addr, n))
       r.memory(addr) = n
+      //println("   !out %s %s" format (r.ds, r.rs))
     })
 
     slow(5, "@", { r =>
+      //println("   @in  %s" format r.ds)
       val addr = r.ds.pop()
       r.ds.push(r.memory(addr))
+      //println("   @out %s" format r.ds)
     })
 
     builtins(6) = { r =>
@@ -218,7 +228,8 @@ final case class Runtime(memlen: Int, words: Array[String]) {
     slow(12, ".c", r => System.out.print(r.ds.pop().toChar))
     slow(13, ".n", r => System.out.print(r.ds.pop()))
     slow(14, ".s", r => System.out.print(r.ds))
-    // slow(15, ".r", r => System.out.print(r.rs))
+    slow(15, ".r", r => System.out.print(r.rs))
+    slow(25, ".x", r => System.out.print(r.memory.slice(665, 685).toList))
 
     slow(16, ":", { r =>
       log(":")
@@ -246,13 +257,13 @@ final case class Runtime(memlen: Int, words: Array[String]) {
     // possible to replace but annoying
     fast(20, "[", { r => r.compiling = false })
 
-    // slow(22, "r>", { r =>
-    //   r.ds.push(r.rs.pop())
-    // })
+    slow(22, "r>", { r =>
+      r.ds.push(r.rs.pop())
+    })
 
-    // slow(23, ">r", {
-    //   r => r.rs.push(r.ds.pop())
-    // })
+    slow(23, ">r", {
+      r => r.rs.push(r.ds.pop())
+    })
 
     // run : loop interpret 0 @ -5 0br ;
     memory(10) = 0 // flags
@@ -289,45 +300,68 @@ object Runtime {
 
   def main(args: Array[String]): Unit = {
     val prog = """
+( machinery to support immediate functions and [] )
 : ] 1 1 ! ;
 : immed 0x80000000 2 @ -1 + ! ;
 : immediate [ immed ] immed ;
 
+( character constants )
 : nl 10 .c ;
 : sp 32 .c ;
+: asc-0 60 ;
+: asc-A 101 ;
+: asc-a 141 ;
 
+( numeric register constants )
+: PC 0 ;
+: COMPILING 1 ;
+: MFREE 2 ;
+: W 3 ;
+: T1 4 ;
+: T2 5 ;
+: T3 6 ;
+
+( boolean constants )
+: FALSE 0 ;
+: TRUE 1 ;
+
+( basic stack manipulation )
 : drop 4 ! ;
 : dup 4 ! 4 @ 4 @ ;
 : swap 4 ! 5 ! 4 @ 5 @ ;
-: over 4 ! 5 ! 4 @ 5 @ 4 @ ;
+: over 4 ! 5 ! 5 @ 4 @ 5 @ ;
 : rot 4 ! 5 ! 6 ! 5 @ 4 @ 6 @ ;
 : -rot 4 ! 5 ! 6 ! 4 @ 6 @ 5 @ ;
 : nip 4 ! 5 ! 4 @ ;
 : tuck 4 ! 5 ! 5 @ 4 @ 5 @ ;
 
+( top-2 stack manipulation )
 : 2drop 4 ! 4 ! ;
 : 2dup 4 ! 5 ! 5 @ 4 @ 5 @ 4 @ ;
 
-(
-1 2 3 rot .s nl drop drop drop
-1 2 3 -rot .s nl drop drop drop
-1 2 3 2drop .s nl drop
-1 2 3 2dup .s nl drop drop drop drop drop
-)
+( get/set the next free memory cell -- useful for building functions )
+: m@ 2 @ ;
+: m! 2 @ dup -rot ! 1 + 2 ! ;
 
+( inlines the top value of the stack into the current function )
+: inline -2 m! m! ;
+
+( bitwise operators )
 : ~ dup nor ;
 : | nor ~ ;
 : & ~ swap ~ nor ;
 : nand & ~ ;
 : ^ dup rot dup -rot & -rot nor nor ;
 
+( logical/boolean/equality operators )
 : != ^ 7 0br 1 0 2 0br 0 ;
 : == ^ 7 0br 0 0 2 0br 1 ;
 : bool 0 != ;
-: ! 0 == ;
+: not 0 == ; ( TODO: it'd be nice to use ! but we'd need to break with forth )
 : ==0 0 == ;
 : !=0 0 != ;
 
+( sign tests )
 : 0< -2147483648 & 0 != ;
 : 0>= -2147483648 & 0 == ;
 : 0> 2147483647 & 0 != ;
@@ -338,29 +372,90 @@ object Runtime {
   0 0 3 0br           ( ZER: result 0, jump END )
 drop -1 ;             ( NEG: return -1 )
 
+( addition/subtraction/negation )
 : negate ~ 1 + ;
 : - negate + ;
 : -- 1 - ;
 : ++ 1 + ;
 
+( comparisons )
 : cmp swap - cmp0 ;
 : < cmp -1 == ;
 : <= cmp 1 != ;
 : > cmp 1 == ;
 : >= cmp 1 != ;
 
+( multiplication/modulo/division )
 : *helper -rot -- -rot dup -rot + -rot swap rot ;
 : * 0 -rot dup 6 0br rot *helper 0 -12 0br ;
-
 : % 2dup >= 9 0br dup -rot - swap 0 -14 0br drop ;
-
 : /helper rot ++ -rot dup -rot - swap ;
 : / 0 -rot 2dup >= 6 0br /helper 0 -11 0br 2drop ;
 
-: /test .s / .s nl drop ;
+( if/else branching constructions )
+( these are a little bit subtle so they have more comments )
 
-: # .c ; 10 68 76 82 79 87 32 79 76 76 69 72 # # # # # # # # # # # #
+( IF )
+( before: TEST if A endif B )
+( after:  TEST -2 {b-a} 0br [a] A [b] B )
+(   backpatch: a-2 )
 
+( IF-ELSE )
+( before: TEST if A else B endif C )
+( midway: TEST -2 {b-a} 0br [a] A -2 0 -2 9999 0br [b] B C
+(   backpatch: a-2 )
+( after:  TEST -2 {b-a} 0br [a] A -2 0 -2 {c-b} 0br [b] B [c] C )
+(   backpatch: b-2 )
+
+: if immediate
+  -2 m!    ( write const )
+  9999 m!  ( write dummy memory offset )
+  -9 m!    ( write 0br )
+  m@       ( a )        ( r: caller )
+  r> swap  ( caller a ) ( r: )
+  >r >r    ( )          ( r: a caller )
+  ;
+
+: else immediate
+  -2 m!      ( write const )
+  0 m!       ( write 0 )
+  -2 m!      ( write const )
+  9999 m!    ( write dummy memory offset )
+  -9 m!      ( write 0br )
+  m@         ( b )          ( r: a caller )
+  r> r>      ( b caller a ) ( r: )
+  rot dup r> ( caller a b ) ( r: b )
+  rot r>     ( a b )        ( r: b caller )
+  over -     ( a b-a )      ( r: b caller )
+  swap 2 -   ( b-a a-2 )    ( r: b caller )
+  ! ;        ( backpatch memory offset at a-2 with offset b-a )
+  
+: endif immediate
+  m@         ( c )          ( r: b caller )
+  r> r>      ( c caller b ) ( r: )
+  -rot >r    ( b c )        ( r: caller )
+  over -     ( b c-b )      ( r: caller )
+  swap 2 -   ( c-b b-2 )    ( r: caller )
+  !          ( backpatch memory offset at b-2 with offset c-b )
+  ;
+
+( hello world function )
+: # .c ; : hello 10 68 76 82 79 87 32 79 76 76 69 72 # # # # # # # # # # # # ;
+
+hello
+
+( positive if test )
+: xyz1 1 if 68 .c endif 69 .c nl ; xyz1
+( negative if test )
+: xyz2 0 if 68 .c endif 69 .c nl ; xyz2
+
+( BROKEN )
+( positive if/else test )
+( : xyz3 1 if 68 .c else 69 .c endif 70 .c nl ; xyz3 )
+( positive if/else test )
+( : xyz4 0 if 68 .c else 69 .c endif 70 .c nl ; xyz4 )
+
+hello
 """
 
     val parsed = parseString(prog)
