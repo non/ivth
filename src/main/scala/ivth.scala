@@ -155,19 +155,14 @@ final case class Runtime(memlen: Int, words: Array[String]) {
     builtins(3) = { r => r.pc = r.rs.pop() }
 
     slow(4, "!", { r =>
-      //println("   !in  %s %s" format (r.ds, r.rs))
       val addr = r.ds.pop()
       val n = r.ds.pop()
-      //println("   !memory(%s) = %s" format (addr, n))
       r.memory(addr) = n
-      //println("   !out %s %s" format (r.ds, r.rs))
     })
 
     slow(5, "@", { r =>
-      //println("   @in  %s" format r.ds)
       val addr = r.ds.pop()
       r.ds.push(r.memory(addr))
-      //println("   @out %s" format r.ds)
     })
 
     builtins(6) = { r =>
@@ -202,6 +197,16 @@ final case class Runtime(memlen: Int, words: Array[String]) {
       }
     }
 
+    slow(7, "find", { r => 
+      val name = r.words(r.w)
+      r.w += 1
+      val n = r.lookup(name) match {
+        case Word(addr) => addr
+        case _ => 0
+      }
+      r.ds.push(n)
+    })
+
     slow(9, "0br", { r =>
       log("0br")
       val offset = r.ds.pop()
@@ -229,7 +234,18 @@ final case class Runtime(memlen: Int, words: Array[String]) {
     slow(13, ".n", r => System.out.print(r.ds.pop()))
     slow(14, ".s", r => System.out.print(r.ds))
     slow(15, ".r", r => System.out.print(r.rs))
-    slow(25, ".x", r => System.out.print(r.memory.slice(665, 685).toList))
+    slow(25, ".x", r => System.out.print(r.memory.slice(776, 806).toList))
+    slow(26, ".see", { r => 
+      val name = r.words(r.w)
+      r.w += 1
+      val n = r.lookup(name) match {
+        case Word(addr) => addr
+        case _ => sys.error("%s not found" format name)
+      }
+      var i = n
+      while (i < n + 80 && memory(i) != -3) i += 1
+      System.out.println(memory.slice(n, i + 1).mkString(name + ": ", " ", ""))
+    })
 
     slow(16, ":", { r =>
       log(":")
@@ -339,12 +355,19 @@ object Runtime {
 : 2drop 4 ! 4 ! ;
 : 2dup 4 ! 5 ! 5 @ 4 @ 5 @ 4 @ ;
 
+( find 2dup .n nl
+.see 2dup nl )
+
+( get/set the program counter )
+: pc@ r> dup >r ;
+: pc! 0 ! ;
+
 ( get/set the next free memory cell -- useful for building functions )
 : m@ 2 @ ;
 : m! 2 @ dup -rot ! 1 + 2 ! ;
 
-( inlines the top value of the stack into the current function )
-: inline -2 m! m! ;
+( copy from return stack )
+: r@ r> dup >r ;
 
 ( bitwise operators )
 : ~ dup nor ;
@@ -385,6 +408,10 @@ drop -1 ;             ( NEG: return -1 )
 : > cmp 1 == ;
 : >= cmp 1 != ;
 
+( inlines the top value of the stack into the current function )
+: inline -2 m! m! ;
+: resolve immediate -2 m! find dup 0 >= 3 0br 1 + m! ;
+
 ( multiplication/modulo/division )
 : *helper -rot -- -rot dup -rot + -rot swap rot ;
 : * 0 -rot dup 6 0br rot *helper 0 -12 0br ;
@@ -407,28 +434,31 @@ drop -1 ;             ( NEG: return -1 )
 ( after:  TEST -2 {b-a} 0br [a] A -2 0 -2 {c-b} 0br [b] B [c] C )
 (   backpatch: b-2 )
 
+: const! -2 m! m! ;
+
 : if immediate
-  -2 m!    ( write const )
-  9999 m!  ( write dummy memory offset )
-  -9 m!    ( write 0br )
+  -2 m!          ( write const )
+  9999 m!        ( write dummy memory offset )
+  resolve 0br m! ( write 0br )
   m@       ( a )        ( r: caller )
   r> swap  ( caller a ) ( r: )
   >r >r    ( )          ( r: a caller )
   ;
 
 : else immediate
-  -2 m!      ( write const )
-  0 m!       ( write 0 )
-  -2 m!      ( write const )
-  9999 m!    ( write dummy memory offset )
-  -9 m!      ( write 0br )
-  m@         ( b )          ( r: a caller )
-  r> r>      ( b caller a ) ( r: )
-  rot dup r> ( caller a b ) ( r: b )
-  rot r>     ( a b )        ( r: b caller )
-  over -     ( a b-a )      ( r: b caller )
-  swap 2 -   ( b-a a-2 )    ( r: b caller )
-  ! ;        ( backpatch memory offset at a-2 with offset b-a )
+  -2 m!           ( write const )
+  0 m!            ( write 0 )
+  -2 m!           ( write const )
+  9999 m!         ( write dummy memory offset )
+  resolve 0br m!  ( write 0br )
+  m@              ( b )          ( r: a caller )
+  r> r>           ( b caller a ) ( r: )
+  rot dup >r      ( caller a b ) ( r: b )
+  rot >r          ( a b )        ( r: b caller )
+  over -          ( a b-a )      ( r: b caller )
+  swap 2 -        ( b-a a-2 )    ( r: b caller )
+  !               ( backpatch memory offset at a-2 with offset b-a )
+  ;
   
 : endif immediate
   m@         ( c )          ( r: b caller )
@@ -439,21 +469,68 @@ drop -1 ;             ( NEG: return -1 )
   !          ( backpatch memory offset at b-2 with offset c-b )
   ;
 
+( DO )
+( LIMIT START do A loop )
+( LIMIT START >r >r [a] A [z] r> r> -2 1 + 2dup < -2 {c-b} 0br [b] >r >r -2 0 -2 {a-c} 0br [c] 2drop )
+( LIMIT START >r >r A r> r> -2 1 + 2dup < -2 {c-b} 0br >r >r -2 0 -2 {a-c} 0br 2drop )
+( b=z+10 c=z+16 )
+( a-c -> a-z-16 )
+( c-b -> 6 )
+
+: do immediate
+  resolve >r m!
+  resolve >r m!
+  m@            ( a        ) ( r: caller ) 
+  r> swap       ( caller a ) ( r: )
+  >r >r         ( )          ( r: a caller )
+  ;
+
+: loop immediate
+  r> r>           ( caller a ) ( r: )
+  swap >r         ( a )        ( r: caller )
+  m@ - 17 -       ( a-z-16 )   ( r: caller )
+  resolve r> m!
+  resolve r> m!
+  -2 m! 1 m!      ( a-z-16 )   ( r: caller )
+  resolve + m!
+  resolve 2dup m!
+  resolve < m!
+  -2 m! 6 m!      ( a-z-16 )   ( r: caller )
+  resolve 0br m!
+  resolve >r m!
+  resolve >r m!
+  -2 m! 0 m!      ( a-z-16 )   ( r: caller )
+  -2 m! m!        ( )          ( r: caller )
+  resolve 0br m!
+  resolve .s m!
+  resolve .s m!
+  ( resolve 2drop m! )
+  ;
+
+
 ( hello world function )
 : # .c ; : hello 10 68 76 82 79 87 32 79 76 76 69 72 # # # # # # # # # # # # ;
 
 hello
 
+: looper 2 0 do 80 .c nl loop ;
+( .see looper )
+looper
+.s .r nl
+
+hello
+
 ( positive if test )
-: xyz1 1 if 68 .c endif 69 .c nl ; xyz1
+: xyz1 67 .c 1 if 68 .c endif 69 .c nl ; xyz1
 ( negative if test )
-: xyz2 0 if 68 .c endif 69 .c nl ; xyz2
+: xyz2 67 .c 0 if 68 .c endif 69 .c nl ; xyz2
+
 
 ( BROKEN )
 ( positive if/else test )
-( : xyz3 1 if 68 .c else 69 .c endif 70 .c nl ; xyz3 )
+: xyz3 67 .c 1 if 68 .c else 69 .c endif 70 .c nl ; xyz3
 ( positive if/else test )
-( : xyz4 0 if 68 .c else 69 .c endif 70 .c nl ; xyz4 )
+: xyz4 67 .c 0 if 68 .c else 69 .c endif 70 .c nl ; xyz4
 
 hello
 """
